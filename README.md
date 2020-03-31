@@ -21,11 +21,6 @@
 - [HTTP](./notes/HTTP.md)
 - [Socket](./notes/Socket.md)
 
-## :art: 面向对象
-
-- [面向对象思想](./notes/面向对象思想.md)
-- [设计模式](./notes/设计模式%20-%20目录.md)
-
 ## :floppy_disk: 数据库
 
 - [数据库系统原理](./notes/数据库系统原理.md)
