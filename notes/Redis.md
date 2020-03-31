@@ -27,16 +27,6 @@
 * [八、持久化](#八持久化)
     * [RDB 持久化](#rdb-持久化)
     * [AOF 持久化](#aof-持久化)
-* [九、事务](#九事务)
-* [十、事件](#十事件)
-    * [文件事件](#文件事件)
-    * [时间事件](#时间事件)
-    * [事件的调度与执行](#事件的调度与执行)
-* [十一、复制](#十一复制)
-    * [连接过程](#连接过程)
-    * [主从链](#主从链)
-* [十二、Sentinel](#十二sentinel)
-* [十三、分片](#十三分片)
 * [十四、一个简单的论坛系统分析](#十四一个简单的论坛系统分析)
     * [文章信息](#文章信息)
     * [点赞功能](#点赞功能)
@@ -255,62 +245,6 @@ rehash 操作不是一次性完成，而是采用渐进方式，这是为了避�
 
 采用渐进式 rehash 会导致字典中的数据分散在两个 dictht 上，因此对字典的查找操作也需要到对应的 dictht 去执行。
 
-```c
-/* Performs N steps of incremental rehashing. Returns 1 if there are still
- * keys to move from the old to the new hash table, otherwise 0 is returned.
- *
- * Note that a rehashing step consists in moving a bucket (that may have more
- * than one key as we use chaining) from the old to the new hash table, however
- * since part of the hash table may be composed of empty spaces, it is not
- * guaranteed that this function will rehash even a single bucket, since it
- * will visit at max N*10 empty buckets in total, otherwise the amount of
- * work it does would be unbound and the function may block for a long time. */
-int dictRehash(dict *d, int n) {
-    int empty_visits = n * 10; /* Max number of empty buckets to visit. */
-    if (!dictIsRehashing(d)) return 0;
-
-    while (n-- && d->ht[0].used != 0) {
-        dictEntry *de, *nextde;
-
-        /* Note that rehashidx can't overflow as we are sure there are more
-         * elements because ht[0].used != 0 */
-        assert(d->ht[0].size > (unsigned long) d->rehashidx);
-        while (d->ht[0].table[d->rehashidx] == NULL) {
-            d->rehashidx++;
-            if (--empty_visits == 0) return 1;
-        }
-        de = d->ht[0].table[d->rehashidx];
-        /* Move all the keys in this bucket from the old to the new hash HT */
-        while (de) {
-            uint64_t h;
-
-            nextde = de->next;
-            /* Get the index in the new hash table */
-            h = dictHashKey(d, de->key) & d->ht[1].sizemask;
-            de->next = d->ht[1].table[h];
-            d->ht[1].table[h] = de;
-            d->ht[0].used--;
-            d->ht[1].used++;
-            de = nextde;
-        }
-        d->ht[0].table[d->rehashidx] = NULL;
-        d->rehashidx++;
-    }
-
-    /* Check if we already rehashed the whole table... */
-    if (d->ht[0].used == 0) {
-        zfree(d->ht[0].table);
-        d->ht[0] = d->ht[1];
-        _dictReset(&d->ht[1]);
-        d->rehashidx = -1;
-        return 0;
-    }
-
-    /* More to rehash... */
-    return 1;
-}
-```
-
 ## 跳跃表
 
 是有序集合的底层实现之一。
@@ -454,117 +388,6 @@ Redis 是内存型数据库，为了保证数据在断电后不会丢失，需�
 
 随着服务器写请求的增多，AOF 文件会越来越大。Redis 提供了一种将 AOF 重写的特性，能够去除 AOF 文件中的冗余写命令。
 
-# 九、事务
-
-一个事务包含了多个命令，服务器在执行事务期间，不会改去执行其它客户端的命令请求。
-
-事务中的多个命令被一次性发送给服务器，而不是一条一条发送，这种方式被称为流水线，它可以减少客户端与服务器之间的网络通信次数从而提升性能。
-
-Redis 最简单的事务实现方式是使用 MULTI 和 EXEC 命令将事务操作包围起来。
-
-# 十、事件
-
-Redis 服务器是一个事件驱动程序。
-
-## 文件事件
-
-服务器通过套接字与客户端或者其它服务器进行通信，文件事件就是对套接字操作的抽象。
-
-Redis 基于 Reactor 模式开发了自己的网络事件处理器，使用 I/O 多路复用程序来同时监听多个套接字，并将到达的事件传送给文件事件分派器，分派器会根据套接字产生的事件类型调用相应的事件处理器。
-
-<div align="center"> <img src="https://cs-notes-1256109796.cos.ap-guangzhou.myqcloud.com/9ea86eb5-000a-4281-b948-7b567bd6f1d8.png" width=""/> </div><br>
-
-## 时间事件
-
-服务器有一些操作需要在给定的时间点执行，时间事件是对这类定时操作的抽象。
-
-时间事件又分为：
-
-- 定时事件：是让一段程序在指定的时间之内执行一次；
-- 周期性事件：是让一段程序每隔指定时间就执行一次。
-
-Redis 将所有时间事件都放在一个无序链表中，通过遍历整个链表查找出已到达的时间事件，并调用相应的事件处理器。
-
-## 事件的调度与执行
-
-服务器需要不断监听文件事件的套接字才能得到待处理的文件事件，但是不能一直监听，否则时间事件无法在规定的时间内执行，因此监听时间应该根据距离现在最近的时间事件来决定。
-
-事件调度与执行由 aeProcessEvents 函数负责，伪代码如下：
-
-```python
-def aeProcessEvents():
-    # 获取到达时间离当前时间最接近的时间事件
-    time_event = aeSearchNearestTimer()
-    # 计算最接近的时间事件距离到达还有多少毫秒
-    remaind_ms = time_event.when - unix_ts_now()
-    # 如果事件已到达，那么 remaind_ms 的值可能为负数，将它设为 0
-    if remaind_ms < 0:
-        remaind_ms = 0
-    # 根据 remaind_ms 的值，创建 timeval
-    timeval = create_timeval_with_ms(remaind_ms)
-    # 阻塞并等待文件事件产生，最大阻塞时间由传入的 timeval 决定
-    aeApiPoll(timeval)
-    # 处理所有已产生的文件事件
-    procesFileEvents()
-    # 处理所有已到达的时间事件
-    processTimeEvents()
-```
-
-将 aeProcessEvents 函数置于一个循环里面，加上初始化和清理函数，就构成了 Redis 服务器的主函数，伪代码如下：
-
-```python
-def main():
-    # 初始化服务器
-    init_server()
-    # 一直处理事件，直到服务器关闭为止
-    while server_is_not_shutdown():
-        aeProcessEvents()
-    # 服务器关闭，执行清理操作
-    clean_server()
-```
-
-从事件处理的角度来看，服务器运行流程如下：
-
-<div align="center"> <img src="https://cs-notes-1256109796.cos.ap-guangzhou.myqcloud.com/c0a9fa91-da2e-4892-8c9f-80206a6f7047.png" width="350"/> </div><br>
-
-# 十一、复制
-
-通过使用 slaveof host port 命令来让一个服务器成为另一个服务器的从服务器。
-
-一个从服务器只能有一个主服务器，并且不支持主主复制。
-
-## 连接过程
-
-1. 主服务器创建快照文件，发送给从服务器，并在发送期间使用缓冲区记录执行的写命令。快照文件发送完毕之后，开始向从服务器发送存储在缓冲区中的写命令；
-
-2. 从服务器丢弃所有旧数据，载入主服务器发来的快照文件，之后从服务器开始接受主服务器发来的写命令；
-
-3. 主服务器每执行一次写命令，就向从服务器发送相同的写命令。
-
-## 主从链
-
-随着负载不断上升，主服务器可能无法很快地更新所有从服务器，或者重新连接和重新同步从服务器将导致系统超载。为了解决这个问题，可以创建一个中间层来分担主服务器的复制工作。中间层的服务器是最上层服务器的从服务器，又是最下层服务器的主服务器。
-
-<div align="center"> <img src="https://cs-notes-1256109796.cos.ap-guangzhou.myqcloud.com/395a9e83-b1a1-4a1d-b170-d081e7bb5bab.png" width="600"/> </div><br>
-
-# 十二、Sentinel
-
-Sentinel（哨兵）可以监听集群中的服务器，并在主服务器进入下线状态时，自动从从服务器中选举出新的主服务器。
-
-# 十三、分片
-
-分片是将数据划分为多个部分的方法，可以将数据存储到多台机器里面，这种方法在解决某些问题时可以获得线性级别的性能提升。
-
-假设有 4 个 Redis 实例 R0，R1，R2，R3，还有很多表示用户的键 user:1，user:2，... ，有不同的方式来选择一个指定的键存储在哪个实例中。
-
-- 最简单的方式是范围分片，例如用户 id 从 0\~1000 的存储到实例 R0 中，用户 id 从 1001\~2000 的存储到实例 R1 中，等等。但是这样需要维护一张映射范围表，维护操作代价很高。
-- 还有一种方式是哈希分片，使用 CRC32 哈希函数将键转换为一个数字，再对实例数量求模就能知道应该存储的实例。
-
-根据执行分片的位置，可以分为三种分片方式：
-
-- 客户端分片：客户端使用一致性哈希等算法决定键应当分布到哪个节点。
-- 代理分片：将客户端请求发送到代理上，由代理转发请求到正确的节点上。
-- 服务器分片：Redis Cluster。
 
 # 十四、一个简单的论坛系统分析
 

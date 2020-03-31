@@ -16,12 +16,7 @@
 * [十五、连接](#十五连接)
 * [十六、组合查询](#十六组合查询)
 * [十七、视图](#十七视图)
-* [十八、存储过程](#十八存储过程)
-* [十九、游标](#十九游标)
-* [二十、触发器](#二十触发器)
 * [二十一、事务管理](#二十一事务管理)
-* [二十二、字符集](#二十二字符集)
-* [二十三、权限管理](#二十三权限管理)
 * [参考资料](#参考资料)
 <!-- GFM-TOC -->
 
@@ -555,101 +550,6 @@ FROM mytable
 WHERE col5 = val;
 ```
 
-# 十八、存储过程
-
-存储过程可以看成是对一系列 SQL 操作的批处理。
-
-使用存储过程的好处：
-
-- 代码封装，保证了一定的安全性；
-- 代码复用；
-- 由于是预先编译，因此具有很高的性能。
-
-命令行中创建存储过程需要自定义分隔符，因为命令行是以 ; 为结束符，而存储过程中也包含了分号，因此会错误把这部分分号当成是结束符，造成语法错误。
-
-包含 in、out 和 inout 三种参数。
-
-给变量赋值都需要用 select into 语句。
-
-每次只能给一个变量赋值，不支持集合的操作。
-
-```sql
-delimiter //
-
-create procedure myprocedure( out ret int )
-    begin
-        declare y int;
-        select sum(col1)
-        from mytable
-        into y;
-        select y*y into ret;
-    end //
-
-delimiter ;
-```
-
-```sql
-call myprocedure(@ret);
-select @ret;
-```
-
-# 十九、游标
-
-在存储过程中使用游标可以对一个结果集进行移动遍历。
-
-游标主要用于交互式应用，其中用户需要对数据集中的任意行进行浏览和修改。
-
-使用游标的四个步骤：
-
-1. 声明游标，这个过程没有实际检索出数据；
-2. 打开游标；
-3. 取出数据；
-4. 关闭游标；
-
-```sql
-delimiter //
-create procedure myprocedure(out ret int)
-    begin
-        declare done boolean default 0;
-
-        declare mycursor cursor for
-        select col1 from mytable;
-        # 定义了一个 continue handler，当 sqlstate '02000' 这个条件出现时，会执行 set done = 1
-        declare continue handler for sqlstate '02000' set done = 1;
-
-        open mycursor;
-
-        repeat
-            fetch mycursor into ret;
-            select ret;
-        until done end repeat;
-
-        close mycursor;
-    end //
- delimiter ;
-```
-
-# 二十、触发器
-
-触发器会在某个表执行以下语句时而自动执行：DELETE、INSERT、UPDATE。
-
-触发器必须指定在语句执行之前还是之后自动执行，之前执行使用 BEFORE 关键字，之后执行使用 AFTER 关键字。BEFORE 用于数据验证和净化，AFTER 用于审计跟踪，将修改记录到另外一张表中。
-
-INSERT 触发器包含一个名为 NEW 的虚拟表。
-
-```sql
-CREATE TRIGGER mytrigger AFTER INSERT ON mytable
-FOR EACH ROW SELECT NEW.col into @result;
-
-SELECT @result; -- 获取结果
-```
-
-DELETE 触发器包含一个名为 OLD 的虚拟表，并且是只读的。
-
-UPDATE 触发器包含一个名为 NEW 和一个名为 OLD 的虚拟表，其中 NEW 是可以被修改的，而 OLD 是只读的。
-
-MySQL 不允许在触发器中使用 CALL 语句，也就是不能调用存储过程。
-
 # 二十一、事务管理
 
 基本术语：
@@ -675,95 +575,6 @@ SAVEPOINT delete1
 ROLLBACK TO delete1
 // ...
 COMMIT
-```
-
-# 二十二、字符集
-
-基本术语：
-
-- 字符集为字母和符号的集合；
-- 编码为某个字符集成员的内部表示；
-- 校对字符指定如何比较，主要用于排序和分组。
-
-除了给表指定字符集和校对外，也可以给列指定：
-
-```sql
-CREATE TABLE mytable
-(col VARCHAR(10) CHARACTER SET latin COLLATE latin1_general_ci )
-DEFAULT CHARACTER SET hebrew COLLATE hebrew_general_ci;
-```
-
-可以在排序、分组时指定校对：
-
-```sql
-SELECT *
-FROM mytable
-ORDER BY col COLLATE latin1_general_ci;
-```
-
-# 二十三、权限管理
-
-MySQL 的账户信息保存在 mysql 这个数据库中。
-
-```sql
-USE mysql;
-SELECT user FROM user;
-```
-
-**创建账户**  
-
-新创建的账户没有任何权限。
-
-```sql
-CREATE USER myuser IDENTIFIED BY 'mypassword';
-```
-
-**修改账户名**  
-
-```sql
-RENAME USER myuser TO newuser;
-```
-
-**删除账户**  
-
-```sql
-DROP USER myuser;
-```
-
-**查看权限**  
-
-```sql
-SHOW GRANTS FOR myuser;
-```
-
-**授予权限**  
-
-账户用 username@host 的形式定义，username@% 使用的是默认主机名。
-
-```sql
-GRANT SELECT, INSERT ON mydatabase.* TO myuser;
-```
-
-**删除权限**  
-
-GRANT 和 REVOKE 可在几个层次上控制访问权限：
-
-- 整个服务器，使用 GRANT ALL 和 REVOKE ALL；
-- 整个数据库，使用 ON database.\*；
-- 特定的表，使用 ON database.table；
-- 特定的列；
-- 特定的存储过程。
-
-```sql
-REVOKE SELECT, INSERT ON mydatabase.* FROM myuser;
-```
-
-**更改密码**  
-
-必须使用 Password() 函数进行加密。
-
-```sql
-SET PASSWROD FOR myuser = Password('new_password');
 ```
 
 # 参考资料
